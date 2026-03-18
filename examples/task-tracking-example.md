@@ -1,276 +1,166 @@
-# Task Tracking Example
+# Task Tracking Example: End-to-End Walkthrough
 
-A complete end-to-end walkthrough of the openclaw-agent-workflow protocol.
+This example traces a complete task lifecycle from user request to final delivery. Every state transition includes the actual report that triggered it.
 
-**Scenario:** User asks the main agent to add a new payments feature, which requires backend API work, database migration, and frontend integration.
-
----
-
-## Step 1 — User Request
-
-```
-User: Add a Stripe payments integration. We need a backend API endpoint,
-      a database table for payment records, and a frontend checkout form.
-```
+**Scenario:** "Audit the API rate-limiting code, fix any bugs you find, and add tests."
 
 ---
 
-## Step 2 — Main Agent: Task Planning
+## 1. User Request → `planned` → `dispatching`
 
-Main agent creates the task and updates `CURRENT_STATE.md`:
+User submits the request. Main agent registers the task and dispatches to worker-a.
 
-```markdown
-# Current Workflow State
-Last updated: 2026-03-19T10:00:00Z
-
-## Active Tasks
-
-| ID    | Title                       | State      | Last Event         | Owner  |
-|-------|-----------------------------|------------|--------------------|--------|
-| T-001 | Stripe payments integration | planned    | created            | main   |
+**Main agent → User:**
 ```
-
-Main agent reports to user:
-
-```
-[TASK T-001] Dispatched → worker agent
-Plan:
-- Create payments database table (migration)
-- Implement /api/payments POST endpoint
-- Add Stripe SDK and webhook handler
-- Build frontend checkout form component
-- Write integration tests
-```
-
-State in `CURRENT_STATE.md` updated to `dispatching`.
-
----
-
-## Step 3 — Worker Agent: Accepted Report
-
-Worker agent receives the task and immediately sends:
-
-```
-REPORT accepted
-task_id: T-001
-echo: Implement Stripe payments integration — DB migration, backend API, frontend form
-plan:
-  - Run database migration to create payments table
-  - Install and configure stripe SDK
-  - Implement POST /api/payments endpoint
-  - Add Stripe webhook handler
-  - Build CheckoutForm React component
-  - Write integration tests
-```
-
-Main agent receives this, updates state to `in_progress`:
-
-```markdown
-| T-001 | Stripe payments integration | in_progress | accepted | worker-payments |
+who:    T-007 / worker-a
+status: dispatching
+output: none yet
+next:   worker-a to confirm acceptance
 ```
 
 ---
 
-## Step 4 — Worker Agent: First Milestone
+## 2. Worker Receives Task → `in_progress`
 
-Worker completes the database migration:
+Worker-a reads the relevant files and sends `accepted` immediately.
 
+**Worker-a → Main agent:**
 ```
-REPORT milestone
-task_id: T-001
-step_completed: Database migration created and applied — payments table live
-next_step: Installing Stripe SDK and configuring API keys
-artifact: db/migrations/20260319_create_payments.sql
-```
-
-Main agent forwards to user:
-
-```
-[TASK T-001] Progress: Database migration complete
-Next: Stripe SDK setup
+status:   accepted
+summary:  audit src/middleware/rateLimit.ts for bugs, fix issues, add regression tests
+evidence: read rateLimit.ts (312 lines) and tests/rateLimit.test.ts (88 lines)
+risk:     none — read-only phase, no changes yet
+next:     scan for off-by-one errors, clock skew, missing edge cases
 ```
 
-`CURRENT_STATE.md` updated:
+Main agent transitions to `in_progress` and reports:
 
-```markdown
-| T-001 | Stripe payments integration | in_progress | milestone: migration done | worker-payments |
+**Main agent → User:**
+```
+who:    T-007 / worker-a
+status: in_progress
+output: rateLimit.ts (312 lines) and test file read
+next:   auditing for bug patterns
 ```
 
 ---
 
-## Step 5 — Worker Agent: Blocked Report
+## 3. Worker Finds Issues → `milestone`
 
-Worker hits an issue with API key configuration:
+Audit complete. Worker-a reports findings.
 
+**Worker-a → Main agent:**
 ```
-REPORT blocked
-task_id: T-001
-blocker: Stripe API keys not present in environment. STRIPE_SECRET_KEY and
-         STRIPE_WEBHOOK_SECRET are missing from .env and CI secrets.
-tried:
-  - Checked .env.example — keys not documented
-  - Checked CI config — no Stripe secrets configured
-  - Checked team docs wiki — no setup guide found
-needs: Stripe API keys (test mode) added to .env and CI secrets
-```
-
-Main agent updates state to `blocked` and reports to user:
-
-```
-[TASK T-001] BLOCKED
-Reason: Stripe API keys missing from environment
-Tried: Checked .env, CI config, and team docs
-Waiting on: STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET (test mode keys)
+status:   milestone
+summary:  audit complete — 2 bugs found
+evidence:
+  - line 87: Date.now() used for window reset → vulnerable to clock skew
+  - line 134: counter not reset on IP ban lift → legit users permanently limited after unban
+risk:     medium — correctness bugs in production, not data-loss severity
+next:     fix line 87 (clock skew), then line 134 (counter reset), then add tests
 ```
 
-`CURRENT_STATE.md` updated:
-
-```markdown
-## Blocked Tasks
-
-| ID    | Title                       | Blocker                        | Since                |
-|-------|-----------------------------|--------------------------------|----------------------|
-| T-001 | Stripe payments integration | Missing Stripe API keys in env | 2026-03-19T10:18:00Z |
+**Main agent → User:**
+```
+who:    T-007 / worker-a
+status: milestone
+output: audit done — 2 bugs found (clock skew line 87, counter reset line 134)
+next:   worker-a fixing both bugs, then adding regression tests
 ```
 
 ---
 
-## Step 6 — User Resolves Blocker
+## 4. Worker Gets Blocked → `blocked`
 
-```
-User: I've added the Stripe test keys to .env and GitHub secrets.
-      STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET are set.
-```
+While fixing Bug 2, worker-a hits a dependency barrier.
 
-Main agent relays to worker. Worker resumes:
-
+**Worker-a → Main agent:**
 ```
-REPORT milestone
-task_id: T-001
-step_completed: Stripe SDK installed and configured — keys verified working
-next_step: Implementing POST /api/payments endpoint
-artifact: src/lib/stripe.ts
+status:   blocked
+summary:  fixing counter reset on IP unban (line 134)
+evidence: IPBanService.onUnban() callback is not exported — cannot hook from rateLimit.ts without modifying IPBanService
+risk:     high — blocked task cannot proceed
+next:     need decision: (A) export the callback from IPBanService, or (B) poll for ban status
 ```
 
-State returns to `in_progress`. `CURRENT_STATE.md` blocker row removed.
-
----
-
-## Step 7 — Worker Agent: More Milestones
-
+**Main agent → User:**
 ```
-REPORT milestone
-task_id: T-001
-step_completed: POST /api/payments endpoint implemented with idempotency key support
-next_step: Adding Stripe webhook handler
-artifact: src/api/payments.ts
+who:    T-007 / worker-a
+status: blocked
+output: Bug 1 fixed (clock skew). Bug 2 blocked: IPBanService.onUnban() not exported
+next:   user decision required — export callback (A) or poll for ban status (B)?
 ```
 
-```
-REPORT milestone
-task_id: T-001
-step_completed: Stripe webhook handler implemented and verified locally
-next_step: Building CheckoutForm React component
-artifact: src/api/webhooks/stripe.ts
-```
-
-```
-REPORT milestone
-task_id: T-001
-step_completed: CheckoutForm component built with card element and error handling
-next_step: Writing integration tests
-artifact: src/components/CheckoutForm.tsx
-```
-
-Main agent forwards each to user with brief updates:
-```
-[TASK T-001] Progress: /api/payments endpoint done
-[TASK T-001] Progress: Webhook handler done
-[TASK T-001] Progress: CheckoutForm component done — writing tests
-```
+**User:** "Go with option A — export the callback."
 
 ---
 
-## Step 8 — Worker Agent: Done Report
+## 5. Blocker Resolved → Back to `in_progress`, then `done`
 
+Main agent relays the decision. Worker-a resumes and completes the task.
+
+**Worker-a → Main agent:**
 ```
-REPORT done
-task_id: T-001
-summary: Stripe payments integration complete. Backend API endpoint with idempotency,
-         webhook handler for payment confirmation events, database migration for
-         payment records, and CheckoutForm frontend component with error handling.
-         All integration tests passing.
-artifacts:
-  - db/migrations/20260319_create_payments.sql
-  - src/lib/stripe.ts
-  - src/api/payments.ts
-  - src/api/webhooks/stripe.ts
-  - src/components/CheckoutForm.tsx
-  - tests/integration/payments.test.ts
-success_criteria_met: true
-notes: Webhook endpoint needs to be registered in Stripe dashboard before going to prod.
-       See src/api/webhooks/stripe.ts line 3 for the expected URL path.
+status:   milestone
+summary:  IPBanService updated, Bug 2 fixed, regression tests written
+evidence:
+  - src/services/IPBanService.ts: onUnban() now exported
+  - src/middleware/rateLimit.ts: line 134 updated to call onUnban()
+  - tests/rateLimit.test.ts: 4 new tests added
+risk:     low — change is backward-compatible
+next:     running full test suite
+```
+
+**Worker-a → Main agent:**
+```
+status:   done
+summary:  both bugs fixed, 4 regression tests added, all 47 tests passing
+evidence:
+  - src/middleware/rateLimit.ts (fixes at lines 87 and 134)
+  - src/services/IPBanService.ts (onUnban exported)
+  - tests/rateLimit.test.ts (4 new: clock-skew, unban-reset, concurrent, zero-limit)
+  - test run output: 47 passed, 0 failed
+risk:     none
+next:     none
 ```
 
 ---
 
-## Step 9 — Main Agent: Review
+## 6. Main Agent Verifies → `done`
 
-Main agent checks the artifacts, verifies tests pass, confirms success criteria:
+Main agent enters `reviewing` state and checks:
+- [x] rateLimit.ts line 87 uses `process.hrtime()` — correct
+- [x] rateLimit.ts line 134 calls `onUnban()` to reset counter — correct
+- [x] IPBanService export is backward-compatible — correct
+- [x] 4 new tests present, all passing — confirmed
 
-- Database migration exists and applies cleanly
-- API endpoint matches spec
-- Webhook handler registered at correct path
-- Frontend component renders and submits
-- Tests all green
+Verification passed. Main agent reports completion.
 
----
-
-## Step 10 — Main Agent: Report Done to User
-
+**Main agent → User:**
 ```
-[TASK T-001] DONE
-Summary: Stripe payments integration complete — API, webhook, DB migration, checkout form
-Artifacts:
-  - db/migrations/20260319_create_payments.sql
-  - src/api/payments.ts + webhook handler
-  - src/components/CheckoutForm.tsx
-  - Integration tests passing
-
-Note: Register the webhook URL in your Stripe dashboard before deploying to prod.
-      Path: /api/webhooks/stripe
-```
-
-`CURRENT_STATE.md` final state:
-
-```markdown
-# Current Workflow State
-Last updated: 2026-03-19T11:05:00Z
-
-## Active Tasks
-(none)
-
-## Completed Tasks (last 5)
-
-| ID    | Title                       | Completed At         | Artifacts                              |
-|-------|-----------------------------|----------------------|----------------------------------------|
-| T-001 | Stripe payments integration | 2026-03-19T11:05:00Z | payments.sql, payments.ts, +4 files    |
+who:    T-007 / worker-a
+status: done
+output:
+  - 2 bugs fixed in src/middleware/rateLimit.ts
+  - src/services/IPBanService.ts updated (onUnban exported)
+  - 4 regression tests added (47 total, all passing)
+next:   task complete
 ```
 
 ---
 
-## Summary
+## State Transition Summary
 
-This example demonstrates:
+```
+planned
+  → dispatching      main dispatches to worker-a
+  → in_progress      worker-a: accepted (evidence: files read)
+  → milestone        worker-a: audit done, 2 bugs found
+  → blocked          worker-a: IPBanService.onUnban() not exported
+  → in_progress      user unblocks, worker-a resumes
+  → milestone        bugs fixed, tests written
+  → reviewing        worker-a: done (47 tests passing)
+  → done             main verifies artifacts and reports to user
+```
 
-| Protocol Event | What Happened |
-|---|---|
-| Task created | Main agent created T-001, reported plan to user |
-| `accepted` report | Worker echoed task back, state → `in_progress` |
-| `milestone` reports | User saw progress at each step, never wondered "is it still running?" |
-| `blocked` report | User was immediately informed of the blocker with full context |
-| Blocker resolved | State returned to `in_progress` without user having to chase |
-| `done` report | Full artifact list and caveats surfaced to user |
-| Main agent review | State only moved to `done` after main agent verified the work |
-
-No silent disappearances. No mystery. Every state change has evidence.
+Every state had evidence. No silent gaps. No mystery.
