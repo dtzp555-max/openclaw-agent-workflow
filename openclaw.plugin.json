@@ -1,27 +1,7 @@
 {
-  "name": "openclaw-agent-workflow",
+  "name": "agent-workflow",
   "version": "1.0.0",
-  "description": "Lightweight JIRA-like workflow for multi-step agent tasks. Prevents silent failures and status opacity by enforcing state transitions, evidence rules, timeout handling, and structured reporting protocols.",
-  "skill_file": "SKILL.md",
-  "author": "OpenClaw",
-  "tags": ["workflow", "task-tracking", "agent-coordination", "multi-step", "reliability"],
-  "state_file": "CURRENT_STATE.md",
-  "states": [
-    "planned",
-    "dispatching",
-    "in_progress",
-    "blocked",
-    "reviewing",
-    "done",
-    "launch_failure"
-  ],
-  "timeout_minutes": {
-    "dispatch_to_accepted": 10,
-    "in_progress_silence": 10,
-    "blocked_stale": 30
-  },
-  "report_types": ["accepted", "milestone", "blocked", "done"],
-  "examples": [
-    "examples/task-tracking-example.md"
-  ]
+  "description": "Lightweight JIRA-like task tracking for OpenClaw agents",
+  "type": "skill",
+  "entrypoint": "SKILL.md"
 }

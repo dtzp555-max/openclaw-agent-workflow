@@ -1,127 +1,167 @@
 # openclaw-agent-workflow
 
-A lightweight JIRA-like workflow skill for OpenClaw agents. Prevents the three most common failure modes in multi-step agent tasks:
-
-- **Silent disappearance** — agent stops responding with no explanation
-- **Status opacity** — user has no idea what the agent is doing or how far along it is
-- **Lost context on failure** — when something breaks, nobody knows what was tried or where it stopped
+A lightweight task-tracking skill for OpenClaw agents. Gives multi-step agent work a clear, observable lifecycle — no more silent failures, no more mystery state.
 
 ---
 
 ## The Problem
 
-When an OpenClaw agent handles a complex, multi-step task by dispatching sub-agents, things can go wrong silently:
+When an OpenClaw agent dispatches sub-agents to handle complex tasks, three failure modes appear regularly:
 
+**1. Silent disappearance**
 ```
-User: "Migrate the database schema and update all dependent services"
-Agent: "On it!"
-...
-[10 minutes of silence]
-...
-Agent: "Done!" ← Did it actually finish? Was anything skipped?
-```
-
-Or worse:
-
-```
-Agent: "On it!"
-...
-[silence forever]
-...
+User: "Deploy the new service and update the config"
+Main agent: "On it!"
+... [10 minutes of silence] ...
 User: "Hello?"
 ```
 
-This skill solves that by giving agents a shared protocol for state transitions, progress reporting, and timeout handling.
-
----
-
-## How It Works
-
-Every task moves through defined states with evidence requirements:
-
+**2. Status opacity**
 ```
-planned → dispatching → in_progress → reviewing → done
-                              ↓
-                           blocked → (resolved) → in_progress
+Main agent: "Working on it..."
+User: "How far along are you?"
+Main agent: "Still working..."
 ```
 
-Worker agents report back at key moments (`accepted`, `milestone`, `blocked`, `done`). If 10 minutes pass without a report, the main agent marks the task as `launch_failure` and alerts the user.
+**3. Lost context on failure**
+```
+Main agent: "Something went wrong."
+User: "What was tried? Where did it stop? What do I need to fix?"
+Main agent: [no useful answer]
+```
 
-A live `CURRENT_STATE.md` file tracks all active, completed, blocked, and failed tasks.
+This skill solves all three by requiring agents to report at every meaningful state transition, with evidence.
 
 ---
 
 ## Installation
 
-Copy this skill into your OpenClaw project:
+**Step 1:** Copy the skill into your OpenClaw skills directory:
 
 ```bash
 cp -r openclaw-agent-workflow/ ~/.openclaw/skills/
 ```
 
-Or reference it directly in your agent's skill path. Then include it in your agent configuration:
+**Step 2:** Reference it in your agent config:
 
 ```json
 {
-  "skills": ["openclaw-agent-workflow"]
+  "skills": ["agent-workflow"]
 }
+```
+
+That's it. The skill is loaded automatically when the agent starts.
+
+---
+
+## Usage Scenarios
+
+### Scenario 1: Multi-service refactor
+
+```
+User: Refactor the auth module and update all 12 callers
+
+who:    worker-a
+status: dispatching
+output: none yet
+next:   worker-a to confirm acceptance
+
+who:    worker-a
+status: in_progress
+output: read auth/index.ts, identified 12 callers
+next:   rewriting module core
+
+who:    worker-a
+status: milestone
+output: auth/index.ts rewritten, 9/12 callers updated
+next:   3 callers remain (PaymentService, AdminAPI, LegacyBridge)
+
+who:    worker-a
+status: done
+output: all 12 callers updated, tests passing (auth.test.ts)
+next:   task complete
+```
+
+### Scenario 2: Worker gets blocked
+
+```
+User: Migrate the database schema
+
+who:    worker-b
+status: in_progress
+output: migration script written (migrations/0042_schema.sql)
+next:   running migration
+
+who:    worker-b
+status: blocked
+output: migration/0042_schema.sql exists, but prod DB is read-only
+next:   need DB write credentials or manual approval to proceed
+```
+
+### Scenario 3: Launch failure (timeout)
+
+```
+User: Run the full integration test suite
+
+who:    worker-c
+status: dispatching
+output: none yet
+next:   awaiting accepted report
+
+[10 minutes pass with no response]
+
+who:    worker-c
+status: blocked
+output: no accepted report received within 10 minutes
+next:   retry dispatch or cancel — user decision required
 ```
 
 ---
 
-## Usage
-
-### Starting a tracked task
-
-When the main agent receives a multi-step task, it should:
-
-1. Create a task entry in `CURRENT_STATE.md` with state `planned`
-2. Dispatch to a worker agent with the task ID
-3. Wait for the worker's `accepted` report before proceeding
-4. Forward `milestone` and `blocked` reports to the user
-5. Verify the `done` report before marking the task complete
-
-### Worker agent behavior
-
-Workers follow the reporting protocol in `SKILL.md`. Every worker must:
-
-- Send `accepted` within 10 minutes of receiving a task
-- Send `milestone` after each significant step
-- Send `blocked` immediately when stuck
-- Send `done` with a full summary when finished
-
-### Example interaction
+## State Transition Diagram
 
 ```
-User: Refactor the auth module and update all callers
-
-[TASK T-001] Dispatched → worker agent
-Plan:
-- Audit current auth module
-- Define new interface
-- Rewrite module
-- Update callers
-- Run tests
-
-[TASK T-001] Progress: Auth module audit complete (12 callers found)
-Next: Defining new interface
-
-[TASK T-001] Progress: New interface defined
-Next: Rewriting module
-
-[TASK T-001] BLOCKED
-Reason: CallerX uses internal auth state not exposed by new interface
-Tried: Checked all public methods, reviewed git history
-Waiting on: Decision — expose the state or refactor CallerX separately
-
-User: Refactor CallerX separately
-
-[TASK T-001] Progress: Blocker resolved, resuming module rewrite
-...
-
-[TASK T-001] DONE
-Summary: Auth module refactored, 12 callers updated, CallerX refactored separately
-Artifacts: src/auth/index.ts, src/auth/interface.ts, tests/auth.test.ts (+11 files)
+                    +----------+
+                    | planned  |
+                    +----------+
+                         |
+                    (dispatch)
+                         |
+                         v
+                  +-------------+
+                  | dispatching |
+                  +-------------+
+                         |
+               (worker: accepted)
+                         |
+                         v
+                  +------------+
+          +-----> | in_progress|
+          |       +------------+
+          |            |  |
+          |    (worker: |  | (worker:
+          |  milestone) |  |   done)
+          |             |  |
+          |   [report   |  v
+          |   to user]  | reviewing |
+          |             +----------+
+          |                  |
+          |         (main: verified)
+          |                  |
+          |                  v
+          |              +------+
+          |              | done |
+          |              +------+
+          |
+          | (blocked → resolved)
+          |
+     +--------+
+     | blocked|
+     +--------+
+          |
+   (user unblocks)
+          |
+     [back to in_progress]
 ```
 
 ---
@@ -129,15 +169,7 @@ Artifacts: src/auth/index.ts, src/auth/interface.ts, tests/auth.test.ts (+11 fil
 ## Files
 
 | File | Purpose |
-|---|---|
-| `SKILL.md` | Full protocol definition — states, evidence rules, timeouts, report formats |
+|------|---------|
+| `SKILL.md` | Full protocol: states, evidence rules, timeouts, report formats |
 | `openclaw.plugin.json` | Skill registration metadata |
-| `CURRENT_STATE.md` | Live task state (auto-managed by agents, created on first use) |
-| `examples/task-tracking-example.md` | Complete worked example |
-
----
-
-## See Also
-
-- `SKILL.md` — full protocol specification
-- `examples/task-tracking-example.md` — end-to-end worked example with all report types
+| `examples/task-tracking-example.md` | End-to-end worked example |
